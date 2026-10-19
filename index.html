@@ -6,6 +6,9 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Block Blast">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;600&display=swap" rel="stylesheet">
 <title>Block Blast</title>
 <style>
   html, body {
@@ -40,18 +43,27 @@ const IZGARA_X = 20;
 const IZGARA_Y = 80;
 const KUCUK_HUCRE = 24;    // alttaki parçaların kare boyu
 const PARMAK_YUKARI = 80;  // sürüklerken parça parmağın üstünde dursun
+const TAKIP_HIZI = 0.55;   // sürükleme sertliği (0.22 çok yumuşak, 1 tamamen sert)
+const BEKLEME = 5 * 60 * 1000;   // temizle düğmesi 5 dakikada bir hazır olur (milisaniye)
+// Temizle düğmesinin yeri (üst orta)
+const BUTON = { x: 165, y: 28, g: 110, y2: 34 };
 
 const tuval = document.getElementById("oyun");
 const cizim = tuval.getContext("2d");
 
 // Renkler
-const ARKA_PLAN = "#1e1e32";
-const BOS_KARE = "#323250";
-const RENKLER = ["#e65050", "#50c864", "#508ce6", "#f0c83c", "#b45adc", "#f08c3c"];
+const BOS_KARE = "rgba(255, 255, 255, 0.10)";
+// Yumuşak, yuvarlak hatlı yazı tipi (yüklenemezse telefonun kendi yazı tipi kullanılır)
+const YAZI_TIPI = '"Nunito", ui-rounded, "SF Pro Rounded", system-ui, sans-serif';
+// Yumuşak pastel renkler (göz yormaz)
+const RENKLER = ["#f4a6b7", "#a8e0c1", "#9ec5f0", "#f7dc92", "#c9b3ec", "#f5b895"];
 
 // Parça şekilleri: her şekil [satır, sütun] çiftlerinden oluşur
 const SEKILLER = [
+  // Tek kare
   [[0,0]],
+
+  // Çizgiler (2, 3, 4, 5 uzunluğunda; yatay ve dikey)
   [[0,0],[0,1]],
   [[0,0],[1,0]],
   [[0,0],[0,1],[0,2]],
@@ -59,14 +71,47 @@ const SEKILLER = [
   [[0,0],[0,1],[0,2],[0,3]],
   [[0,0],[1,0],[2,0],[3,0]],
   [[0,0],[0,1],[0,2],[0,3],[0,4]],
-  [[0,0],[0,1],[1,0],[1,1]],
-  [[0,0],[0,1],[0,2],[1,0],[1,1],[1,2],[2,0],[2,1],[2,2]],
+  [[0,0],[1,0],[2,0],[3,0],[4,0]],
+
+  // Kareler ve dikdörtgenler
+  [[0,0],[0,1],[1,0],[1,1]],                                   // 2x2
+  [[0,0],[0,1],[0,2],[1,0],[1,1],[1,2],[2,0],[2,1],[2,2]],     // 3x3
+  [[0,0],[0,1],[0,2],[1,0],[1,1],[1,2]],                       // 2x3 yatay
+  [[0,0],[0,1],[1,0],[1,1],[2,0],[2,1]],                       // 3x2 dikey
+
+  // Küçük L (3 kare, 4 yön)
   [[0,0],[1,0],[1,1]],
   [[0,0],[0,1],[1,1]],
   [[0,0],[0,1],[1,0]],
   [[0,1],[1,0],[1,1]],
+
+  // Büyük L (5 kare, 4 yön)
   [[0,0],[1,0],[2,0],[2,1],[2,2]],
-  [[0,0],[0,1],[0,2],[1,1]]
+  [[0,0],[0,1],[0,2],[1,0],[2,0]],
+  [[0,0],[0,1],[0,2],[1,2],[2,2]],
+  [[0,2],[1,2],[2,0],[2,1],[2,2]],
+
+  // L ve J (4 kare, 8 yön)
+  [[0,0],[1,0],[2,0],[2,1]],
+  [[0,1],[1,1],[2,0],[2,1]],
+  [[0,0],[0,1],[1,0],[2,0]],
+  [[0,0],[0,1],[1,1],[2,1]],
+  [[0,0],[0,1],[0,2],[1,0]],
+  [[0,0],[0,1],[0,2],[1,2]],
+  [[0,2],[1,0],[1,1],[1,2]],
+  [[0,0],[1,0],[1,1],[1,2]],
+
+  // T (4 yön)
+  [[0,0],[0,1],[0,2],[1,1]],
+  [[0,1],[1,0],[1,1],[1,2]],
+  [[0,0],[1,0],[1,1],[2,0]],
+  [[0,1],[1,0],[1,1],[2,1]],
+
+  // S ve Z (yatay ve dikey)
+  [[0,1],[0,2],[1,0],[1,1]],
+  [[0,0],[0,1],[1,1],[1,2]],
+  [[0,0],[1,0],[1,1],[2,1]],
+  [[0,1],[1,0],[1,1],[2,0]]
 ];
 
 // ---------- Oyun durumu ----------
@@ -78,6 +123,22 @@ let tutulan = -1;          // sürüklenen parçanın numarası, yoksa -1
 let fareX = 0;
 let fareY = 0;
 let bitti = false;
+
+// Sürüklenen parçanın ekranda görünen (yumuşatılmış) konumu ve boyutu
+let sMerkezX = 0;
+let sMerkezY = 0;
+let sBoyut = KUCUK_HUCRE;
+
+// Temizle düğmesi: bu zamandan sonra kullanılabilir olur
+let sonrakiTemizleme = Date.now() + BEKLEME;
+let beyazParlama = 0;      // ekran temizlenince kısa bir parlama efekti
+
+// Patlama efektleri
+const parcacikler = [];    // patlayan karelerden saçılan küçük parçacıklar
+const parlamalar = [];     // patlayan karelerin üstünde beliren beyaz parlamalar
+
+// Oyun bittiği an (animasyon bu zamandan itibaren başlar)
+let bittiZamani = 0;
 
 // En yüksek puanı telefonda sakla
 try {
@@ -162,11 +223,18 @@ function doluSatirSutunSil() {
     if (dolu) silinecekSutunlar.push(k);
   }
 
+  // Silmeden önce her dolu kare için küçük bir patlama başlat
   for (const r of silinecekSatirlar) {
-    for (let k = 0; k < BOYUT; k++) izgara[r][k] = null;
+    for (let k = 0; k < BOYUT; k++) {
+      if (izgara[r][k] !== null) patlamaOlustur(r, k, izgara[r][k]);
+      izgara[r][k] = null;
+    }
   }
   for (const k of silinecekSutunlar) {
-    for (let r = 0; r < BOYUT; r++) izgara[r][k] = null;
+    for (let r = 0; r < BOYUT; r++) {
+      if (izgara[r][k] !== null) patlamaOlustur(r, k, izgara[r][k]);
+      izgara[r][k] = null;
+    }
   }
 
   return silinecekSatirlar.length + silinecekSutunlar.length;
@@ -190,6 +258,26 @@ function yeniden() {
   puan = 0;
   tutulan = -1;
   bitti = false;
+  sonrakiTemizleme = Date.now() + BEKLEME;   // yeni oyunda sayaç baştan başlar
+  beyazParlama = 0;
+}
+
+// Temizle düğmesi kullanılabilir mi?
+function temizleHazirMi() {
+  return sonrakiTemizleme - Date.now() <= 0;
+}
+
+// Bütün ızgarayı temizler
+function ekraniTemizle() {
+  // Dolu karelerin hepsi patlasın
+  for (let r = 0; r < BOYUT; r++) {
+    for (let k = 0; k < BOYUT; k++) {
+      if (izgara[r][k] !== null) patlamaOlustur(r, k, izgara[r][k]);
+    }
+  }
+  izgara = bosIzgara();
+  beyazParlama = 1;
+  sonrakiTemizleme = Date.now() + BEKLEME;
 }
 
 // Sürüklenen parçanın ızgarada hangi satır/sütuna denk geldiği
@@ -205,9 +293,187 @@ function suruklenenKonum(parca) {
 }
 
 // ---------- Çizim fonksiyonları ----------
-function kareCiz(x, y, boyut, renk) {
+// Yuvarlak köşeli dikdörtgen çizer
+function yuvarlakKare(x, y, g, y2, yaricap) {
+  cizim.beginPath();
+  cizim.moveTo(x + yaricap, y);
+  cizim.arcTo(x + g, y, x + g, y + y2, yaricap);
+  cizim.arcTo(x + g, y + y2, x, y + y2, yaricap);
+  cizim.arcTo(x, y + y2, x, y, yaricap);
+  cizim.arcTo(x, y, x + g, y, yaricap);
+  cizim.closePath();
+}
+
+// Tek bir kare çizer. parlak = true ise üstüne yumuşak bir ışık vurur
+function kareCiz(x, y, boyut, renk, parlak) {
+  if (parlak === undefined) parlak = true;
+  const bosluk = 2;
+  const yaricap = boyut * 0.22;
   cizim.fillStyle = renk;
-  cizim.fillRect(x + 1, y + 1, boyut - 2, boyut - 2);
+  yuvarlakKare(x + bosluk, y + bosluk, boyut - bosluk * 2, boyut - bosluk * 2, yaricap);
+  cizim.fill();
+  if (parlak) {
+    cizim.fillStyle = "rgba(255, 255, 255, 0.28)";
+    yuvarlakKare(x + bosluk + boyut * 0.1, y + bosluk + boyut * 0.08, boyut * 0.5, boyut * 0.16, boyut * 0.08);
+    cizim.fill();
+  }
+}
+
+// ---------- Rahatlatıcı arka plan ----------
+// Yavaşça renk değiştiren gökyüzü, süzülen baloncuklar ve yanıp sönen yıldızlar
+const baloncuklar = [];
+for (let i = 0; i < 22; i++) {
+  baloncuklar.push({
+    x: Math.random() * 440,
+    y: Math.random() * 640,
+    boyut: 6 + Math.random() * 26,
+    hiz: 0.15 + Math.random() * 0.35,
+    sallanma: Math.random() * 6.28,
+    saydamlik: 0.05 + Math.random() * 0.10
+  });
+}
+
+const yildizlar = [];
+for (let i = 0; i < 40; i++) {
+  yildizlar.push({
+    x: Math.random() * 440,
+    y: Math.random() * 640,
+    boyut: 0.8 + Math.random() * 1.6,
+    faz: Math.random() * 6.28
+  });
+}
+
+function arkaPlanCiz() {
+  const zaman = Date.now() / 1000;
+
+  // Çok yavaş değişen mor-mavi geçişli arka plan
+  const ton = 235 + Math.sin(zaman / 12) * 25;
+  const gradyan = cizim.createLinearGradient(0, 0, 0, 640);
+  gradyan.addColorStop(0, "hsl(" + ton + ", 45%, 22%)");
+  gradyan.addColorStop(1, "hsl(" + (ton + 40) + ", 40%, 38%)");
+  cizim.fillStyle = gradyan;
+  cizim.fillRect(0, 0, 440, 640);
+
+  // Yanıp sönen küçük yıldızlar
+  for (const y of yildizlar) {
+    const parlaklik = 0.25 + 0.35 * Math.sin(zaman * 1.5 + y.faz);
+    cizim.fillStyle = "rgba(255, 255, 255, " + Math.max(parlaklik, 0) + ")";
+    cizim.beginPath();
+    cizim.arc(y.x, y.y, y.boyut, 0, Math.PI * 2);
+    cizim.fill();
+  }
+
+  // Yukarı doğru süzülen yumuşak baloncuklar
+  for (const b of baloncuklar) {
+    b.y -= b.hiz;
+    if (b.y < -b.boyut) {
+      b.y = 640 + b.boyut;
+      b.x = Math.random() * 440;
+    }
+    const x = b.x + Math.sin(zaman / 3 + b.sallanma) * 12;
+    cizim.fillStyle = "rgba(255, 255, 255, " + b.saydamlik + ")";
+    cizim.beginPath();
+    cizim.arc(x, b.y, b.boyut, 0, Math.PI * 2);
+    cizim.fill();
+  }
+}
+
+// Üst ortadaki temizle düğmesi: hazır değilken geri sayım gösterir
+function temizleButonuCiz() {
+  const kalan = sonrakiTemizleme - Date.now();
+  const hazir = kalan <= 0;
+
+  if (hazir) {
+    const nabiz = 0.5 + 0.5 * Math.sin(Date.now() / 400);    // hafifçe parlayıp söner
+    cizim.fillStyle = "rgba(255, 255, 255, " + (0.28 + 0.12 * nabiz) + ")";
+  } else {
+    cizim.fillStyle = "rgba(255, 255, 255, 0.10)";
+  }
+  yuvarlakKare(BUTON.x, BUTON.y, BUTON.g, BUTON.y2, 17);
+  cizim.fill();
+
+  let yazi = "Temizle";
+  if (!hazir) {
+    const saniye = Math.ceil(kalan / 1000);
+    const dakika = Math.floor(saniye / 60);
+    const sn = saniye % 60;
+    yazi = "Temizle " + dakika + ":" + (sn < 10 ? "0" : "") + sn;
+  }
+  cizim.textAlign = "center";
+  cizim.font = "600 14px " + YAZI_TIPI;
+  cizim.fillStyle = hazir ? "rgba(255, 255, 255, 0.95)" : "rgba(255, 255, 255, 0.55)";
+  cizim.fillText(yazi, BUTON.x + BUTON.g / 2, BUTON.y + 22);
+}
+
+// ---------- Patlama efekti ----------
+// Bir karenin olduğu yerde parlama ve etrafa saçılan küçük parçacıklar oluşturur
+function patlamaOlustur(satir, sutun, renk) {
+  const merkezX = IZGARA_X + sutun * HUCRE + HUCRE / 2;
+  const merkezY = IZGARA_Y + satir * HUCRE + HUCRE / 2;
+
+  parlamalar.push({ x: merkezX, y: merkezY, omur: 1 });
+
+  for (let i = 0; i < 7; i++) {
+    const aci = Math.random() * Math.PI * 2;
+    const hiz = 1.5 + Math.random() * 3;
+    parcacikler.push({
+      x: merkezX,
+      y: merkezY,
+      hizX: Math.cos(aci) * hiz,
+      hizY: Math.sin(aci) * hiz,
+      boyut: 2 + Math.random() * 3.5,
+      omur: 1,
+      renk: Math.random() < 0.4 ? "#ffffff" : renk
+    });
+  }
+}
+
+// Parlamaları ve parçacıkları hem hareket ettirir hem çizer
+function efektleriCiz() {
+  // Beyaz parlama: kare biraz büyüyerek solar
+  for (let i = parlamalar.length - 1; i >= 0; i--) {
+    const p = parlamalar[i];
+    p.omur -= 0.07;
+    if (p.omur <= 0) {
+      parlamalar.splice(i, 1);
+      continue;
+    }
+    const boyut = HUCRE * (1 + (1 - p.omur) * 0.5);
+    cizim.fillStyle = "rgba(255, 255, 255, " + p.omur * 0.6 + ")";
+    yuvarlakKare(p.x - boyut / 2, p.y - boyut / 2, boyut, boyut, boyut * 0.22);
+    cizim.fill();
+  }
+
+  // Parçacıklar: etrafa saçılır, yavaşça düşer ve solar
+  for (let i = parcacikler.length - 1; i >= 0; i--) {
+    const p = parcacikler[i];
+    p.x += p.hizX;
+    p.y += p.hizY;
+    p.hizY += 0.12;        // hafif yer çekimi
+    p.hizX *= 0.97;        // yavaşlama
+    p.omur -= 0.03;
+    if (p.omur <= 0) {
+      parcacikler.splice(i, 1);
+      continue;
+    }
+    cizim.globalAlpha = p.omur;
+    cizim.fillStyle = p.renk;
+    cizim.beginPath();
+    cizim.arc(p.x, p.y, p.boyut * p.omur + 0.5, 0, Math.PI * 2);
+    cizim.fill();
+  }
+  cizim.globalAlpha = 1;
+}
+
+// ---------- Animasyon yardımcıları ----------
+// t zamanında, baslangic'tan sure kadar süren işin 0 ile 1 arası ilerlemesi
+function ilerleme(t, baslangic, sure) {
+  return Math.min(Math.max((t - baslangic) / sure, 0), 1);
+}
+
+// Hızlı başlayıp yavaşça duran yumuşak geçiş
+function yumusat(x) {
+  return 1 - Math.pow(1 - x, 3);
 }
 
 function parcaCiz(parca, solX, solY, hucreBoyu) {
@@ -218,23 +484,42 @@ function parcaCiz(parca, solX, solY, hucreBoyu) {
 
 function ciz() {
   // Arka plan
-  cizim.fillStyle = ARKA_PLAN;
-  cizim.fillRect(0, 0, 440, 640);
+  arkaPlanCiz();
 
   // Puanlar
-  cizim.fillStyle = "white";
-  cizim.font = "bold 32px sans-serif";
+  cizim.shadowColor = "rgba(0, 0, 0, 0.25)";
+  cizim.shadowBlur = 6;
+  cizim.fillStyle = "rgba(255, 255, 255, 0.92)";
+  cizim.font = "600 28px " + YAZI_TIPI;
   cizim.textAlign = "left";
-  cizim.fillText("Puan: " + puan, 20, 50);
-  cizim.font = "18px sans-serif";
+  cizim.fillText("Puan: " + puan, 22, 50);
+  cizim.fillStyle = "rgba(255, 255, 255, 0.7)";
+  cizim.font = "400 17px " + YAZI_TIPI;
   cizim.textAlign = "right";
-  cizim.fillText("En yüksek: " + enYuksek, 420, 48);
+  cizim.fillText("En yüksek: " + enYuksek, 418, 48);
+
+  // Sağ alt köşede küçük imza
+  cizim.fillStyle = "rgba(255, 255, 255, 0.5)";
+  cizim.font = "400 12px " + YAZI_TIPI;
+  cizim.textAlign = "right";
+  cizim.fillText("enestoklu_", 420, 628);
+  cizim.shadowBlur = 0;
+  cizim.shadowColor = "transparent";
+
+  // Ekranı temizleme düğmesi
+  temizleButonuCiz();
+
+  // Izgaranın arkasındaki yarı saydam panel
+  cizim.fillStyle = "rgba(0, 0, 0, 0.18)";
+  yuvarlakKare(IZGARA_X - 8, IZGARA_Y - 8, BOYUT * HUCRE + 16, BOYUT * HUCRE + 16, 18);
+  cizim.fill();
 
   // Izgara
   for (let r = 0; r < BOYUT; r++) {
     for (let k = 0; k < BOYUT; k++) {
-      const renk = izgara[r][k] === null ? BOS_KARE : izgara[r][k];
-      kareCiz(IZGARA_X + k * HUCRE, IZGARA_Y + r * HUCRE, HUCRE, renk);
+      const bos = izgara[r][k] === null;
+      const renk = bos ? BOS_KARE : izgara[r][k];
+      kareCiz(IZGARA_X + k * HUCRE, IZGARA_Y + r * HUCRE, HUCRE, renk, !bos);
     }
   }
 
@@ -248,7 +533,8 @@ function ciz() {
           IZGARA_X + (konum.sutun + kare[1]) * HUCRE,
           IZGARA_Y + (konum.satir + kare[0]) * HUCRE,
           HUCRE,
-          "#6e6ea0"
+          "rgba(255, 255, 255, 0.35)",
+          false
         );
       }
     }
@@ -266,22 +552,73 @@ function ciz() {
   // Sürüklenen parça (tam boyut)
   if (tutulan !== -1) {
     const parca = parcalar[tutulan];
-    const konum = suruklenenKonum(parca);
-    parcaCiz(parca, konum.solX, konum.solY, HUCRE);
+
+    // Parça parmağı seri ama çok hafif yumuşatmayla takip eder
+    // (sayıyı büyütürsen daha sert, küçültürsen daha yumuşak olur; 1 = tamamen sert)
+    const hedefX = fareX;
+    const hedefY = fareY - PARMAK_YUKARI;
+    sMerkezX = sMerkezX + (hedefX - sMerkezX) * TAKIP_HIZI;
+    sMerkezY = sMerkezY + (hedefY - sMerkezY) * TAKIP_HIZI;
+    // Alttaki küçük boydan hızlıca tam boya büyür
+    sBoyut = sBoyut + (HUCRE - sBoyut) * 0.4;
+
+    const solX = sMerkezX - parca.genislik * sBoyut / 2;
+    const solY = sMerkezY - parca.yukseklik * sBoyut / 2;
+    parcaCiz(parca, solX, solY, sBoyut);
+  }
+
+  // Patlama efektleri
+  efektleriCiz();
+
+  // Ekran temizlenince kısa beyaz parlama
+  if (beyazParlama > 0) {
+    cizim.fillStyle = "rgba(255, 255, 255, " + beyazParlama * 0.45 + ")";
+    cizim.fillRect(0, 0, 440, 640);
+    beyazParlama -= 0.03;
   }
 
   // Oyun bitti ekranı
   if (bitti) {
-    cizim.fillStyle = "rgba(0, 0, 0, 0.7)";
+    // Oyun bittiğinden beri geçen süre (saniye)
+    const t = (Date.now() - bittiZamani) / 1000;
+
+    // 1) Karartma perdesi yavaşça gelir
+    const perde = yumusat(ilerleme(t, 0.4, 1.2)) * 0.7;
+    cizim.fillStyle = "rgba(0, 0, 0, " + perde + ")";
     cizim.fillRect(0, 0, 440, 640);
-    cizim.fillStyle = "white";
     cizim.textAlign = "center";
-    cizim.font = "bold 56px sans-serif";
-    cizim.fillText("Oyun Bitti", 220, 260);
-    cizim.font = "32px sans-serif";
-    cizim.fillText("Puan: " + puan, 220, 320);
-    cizim.font = "24px sans-serif";
-    cizim.fillText("Tekrar oynamak için dokun", 220, 380);
+
+    // 2) "Oyun Bitti" yukarıdan süzülerek iner, büyür ve belirir
+    const baslik = yumusat(ilerleme(t, 0.8, 1.1));
+    cizim.save();
+    cizim.globalAlpha = baslik;
+    cizim.translate(220, 260 - 30 * (1 - baslik));
+    cizim.scale(0.85 + 0.15 * baslik, 0.85 + 0.15 * baslik);
+    cizim.fillStyle = "rgba(255, 255, 255, 0.95)";
+    cizim.font = "600 52px " + YAZI_TIPI;
+    cizim.fillText("Oyun Bitti", 0, 0);
+    cizim.restore();
+
+    // 3) Puan belirir ve 0'dan yavaşça sayılarak yükselir
+    const puanIlerleme = yumusat(ilerleme(t, 1.7, 0.9));
+    cizim.save();
+    cizim.globalAlpha = puanIlerleme;
+    cizim.fillStyle = "rgba(255, 255, 255, 0.95)";
+    cizim.font = "400 30px " + YAZI_TIPI;
+    cizim.fillText("Puan: " + Math.round(puan * puanIlerleme), 220, 320 + 12 * (1 - puanIlerleme));
+    cizim.restore();
+
+    // 4) En son "Tekrar oynamak için dokun" belirir ve hafifçe nefes alır
+    const ipucu = ilerleme(t, 2.4, 0.8);
+    if (ipucu > 0) {
+      const nabiz = 0.8 + 0.2 * Math.sin(t * 3);
+      cizim.save();
+      cizim.globalAlpha = ipucu * nabiz;
+      cizim.fillStyle = "rgba(255, 255, 255, 0.85)";
+      cizim.font = "400 22px " + YAZI_TIPI;
+      cizim.fillText("Tekrar oynamak için dokun", 220, 380);
+      cizim.restore();
+    }
   }
 
   requestAnimationFrame(ciz);
@@ -300,7 +637,19 @@ tuval.addEventListener("pointerdown", function (olay) {
   konumAl(olay);
 
   if (bitti) {
-    yeniden();
+    // Animasyon bitmeden yanlışlıkla yeniden başlamasın
+    if (Date.now() - bittiZamani > 2400) {
+      yeniden();
+    }
+    return;
+  }
+
+  // Temizle düğmesine mi dokunuldu?
+  if (fareX > BUTON.x && fareX < BUTON.x + BUTON.g &&
+      fareY > BUTON.y - 6 && fareY < BUTON.y + BUTON.y2 + 6) {
+    if (temizleHazirMi()) {
+      ekraniTemizle();
+    }
     return;
   }
 
@@ -314,6 +663,10 @@ tuval.addEventListener("pointerdown", function (olay) {
     const ust = parca.merkezY - y / 2 - 15;
     if (fareX > sol && fareX < sol + g + 30 && fareY > ust && fareY < ust + y + 30) {
       tutulan = i;
+      // Sürükleme, parçanın alttaki yerinden ve küçük boydan başlasın
+      sMerkezX = parca.merkezX;
+      sMerkezY = parca.merkezY;
+      sBoyut = KUCUK_HUCRE;
       tuval.setPointerCapture(olay.pointerId);
     }
   }
@@ -352,7 +705,10 @@ tuval.addEventListener("pointerup", function (olay) {
       } catch (e) {}
     }
 
-    if (oyunBittiMi()) bitti = true;
+    if (oyunBittiMi()) {
+      bitti = true;
+      bittiZamani = Date.now();
+    }
   }
 
   tutulan = -1;
