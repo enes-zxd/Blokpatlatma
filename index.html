@@ -1,0 +1,379 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Block Blast">
+<title>Block Blast</title>
+<style>
+  html, body {
+    margin: 0;
+    height: 100%;
+    background: #1e1e32;
+    overflow: hidden;
+    touch-action: none;           /* sürüklerken sayfa kaymasın */
+    -webkit-user-select: none;
+    user-select: none;
+    -webkit-touch-callout: none;
+  }
+  body {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  canvas {
+    display: block;
+    touch-action: none;
+  }
+</style>
+</head>
+<body>
+<canvas id="oyun" width="440" height="640"></canvas>
+
+<script>
+// ---------- Ayarlar ----------
+const HUCRE = 50;          // ızgaradaki bir karenin boyu
+const BOYUT = 8;           // 8x8 ızgara
+const IZGARA_X = 20;
+const IZGARA_Y = 80;
+const KUCUK_HUCRE = 24;    // alttaki parçaların kare boyu
+const PARMAK_YUKARI = 80;  // sürüklerken parça parmağın üstünde dursun
+
+const tuval = document.getElementById("oyun");
+const cizim = tuval.getContext("2d");
+
+// Renkler
+const ARKA_PLAN = "#1e1e32";
+const BOS_KARE = "#323250";
+const RENKLER = ["#e65050", "#50c864", "#508ce6", "#f0c83c", "#b45adc", "#f08c3c"];
+
+// Parça şekilleri: her şekil [satır, sütun] çiftlerinden oluşur
+const SEKILLER = [
+  [[0,0]],
+  [[0,0],[0,1]],
+  [[0,0],[1,0]],
+  [[0,0],[0,1],[0,2]],
+  [[0,0],[1,0],[2,0]],
+  [[0,0],[0,1],[0,2],[0,3]],
+  [[0,0],[1,0],[2,0],[3,0]],
+  [[0,0],[0,1],[0,2],[0,3],[0,4]],
+  [[0,0],[0,1],[1,0],[1,1]],
+  [[0,0],[0,1],[0,2],[1,0],[1,1],[1,2],[2,0],[2,1],[2,2]],
+  [[0,0],[1,0],[1,1]],
+  [[0,0],[0,1],[1,1]],
+  [[0,0],[0,1],[1,0]],
+  [[0,1],[1,0],[1,1]],
+  [[0,0],[1,0],[2,0],[2,1],[2,2]],
+  [[0,0],[0,1],[0,2],[1,1]]
+];
+
+// ---------- Oyun durumu ----------
+let izgara = [];
+let parcalar = [];
+let puan = 0;
+let enYuksek = 0;
+let tutulan = -1;          // sürüklenen parçanın numarası, yoksa -1
+let fareX = 0;
+let fareY = 0;
+let bitti = false;
+
+// En yüksek puanı telefonda sakla
+try {
+  enYuksek = Number(localStorage.getItem("blockblast_en_yuksek")) || 0;
+} catch (e) {
+  enYuksek = 0;
+}
+
+// ---------- Yardımcı fonksiyonlar ----------
+function bosIzgara() {
+  const yeni = [];
+  for (let r = 0; r < BOYUT; r++) {
+    const satir = [];
+    for (let k = 0; k < BOYUT; k++) {
+      satir.push(null);
+    }
+    yeni.push(satir);
+  }
+  return yeni;
+}
+
+function rastgele(liste) {
+  return liste[Math.floor(Math.random() * liste.length)];
+}
+
+function yeniParca(sira) {
+  const sekil = rastgele(SEKILLER);
+  let genislik = 0;
+  let yukseklik = 0;
+  for (const kare of sekil) {
+    if (kare[1] + 1 > genislik) genislik = kare[1] + 1;
+    if (kare[0] + 1 > yukseklik) yukseklik = kare[0] + 1;
+  }
+  return {
+    sekil: sekil,
+    renk: rastgele(RENKLER),
+    genislik: genislik,
+    yukseklik: yukseklik,
+    merkezX: 87 + sira * 133,
+    merkezY: 560
+  };
+}
+
+function yeniParcalar() {
+  return [yeniParca(0), yeniParca(1), yeniParca(2)];
+}
+
+function sigarMi(sekil, satir, sutun) {
+  for (const kare of sekil) {
+    const r = satir + kare[0];
+    const k = sutun + kare[1];
+    if (r < 0 || r >= BOYUT || k < 0 || k >= BOYUT) return false;
+    if (izgara[r][k] !== null) return false;
+  }
+  return true;
+}
+
+function yerlestir(sekil, renk, satir, sutun) {
+  for (const kare of sekil) {
+    izgara[satir + kare[0]][sutun + kare[1]] = renk;
+  }
+}
+
+// Dolu satır ve sütunları siler, kaç tane sildiğini döndürür
+function doluSatirSutunSil() {
+  const silinecekSatirlar = [];
+  const silinecekSutunlar = [];
+
+  for (let r = 0; r < BOYUT; r++) {
+    let dolu = true;
+    for (let k = 0; k < BOYUT; k++) {
+      if (izgara[r][k] === null) dolu = false;
+    }
+    if (dolu) silinecekSatirlar.push(r);
+  }
+
+  for (let k = 0; k < BOYUT; k++) {
+    let dolu = true;
+    for (let r = 0; r < BOYUT; r++) {
+      if (izgara[r][k] === null) dolu = false;
+    }
+    if (dolu) silinecekSutunlar.push(k);
+  }
+
+  for (const r of silinecekSatirlar) {
+    for (let k = 0; k < BOYUT; k++) izgara[r][k] = null;
+  }
+  for (const k of silinecekSutunlar) {
+    for (let r = 0; r < BOYUT; r++) izgara[r][k] = null;
+  }
+
+  return silinecekSatirlar.length + silinecekSutunlar.length;
+}
+
+function oyunBittiMi() {
+  for (const parca of parcalar) {
+    if (parca === null) continue;
+    for (let r = 0; r < BOYUT; r++) {
+      for (let k = 0; k < BOYUT; k++) {
+        if (sigarMi(parca.sekil, r, k)) return false;
+      }
+    }
+  }
+  return true;
+}
+
+function yeniden() {
+  izgara = bosIzgara();
+  parcalar = yeniParcalar();
+  puan = 0;
+  tutulan = -1;
+  bitti = false;
+}
+
+// Sürüklenen parçanın ızgarada hangi satır/sütuna denk geldiği
+function suruklenenKonum(parca) {
+  const solX = fareX - parca.genislik * HUCRE / 2;
+  const solY = fareY - parca.yukseklik * HUCRE / 2 - PARMAK_YUKARI;
+  return {
+    solX: solX,
+    solY: solY,
+    sutun: Math.round((solX - IZGARA_X) / HUCRE),
+    satir: Math.round((solY - IZGARA_Y) / HUCRE)
+  };
+}
+
+// ---------- Çizim fonksiyonları ----------
+function kareCiz(x, y, boyut, renk) {
+  cizim.fillStyle = renk;
+  cizim.fillRect(x + 1, y + 1, boyut - 2, boyut - 2);
+}
+
+function parcaCiz(parca, solX, solY, hucreBoyu) {
+  for (const kare of parca.sekil) {
+    kareCiz(solX + kare[1] * hucreBoyu, solY + kare[0] * hucreBoyu, hucreBoyu, parca.renk);
+  }
+}
+
+function ciz() {
+  // Arka plan
+  cizim.fillStyle = ARKA_PLAN;
+  cizim.fillRect(0, 0, 440, 640);
+
+  // Puanlar
+  cizim.fillStyle = "white";
+  cizim.font = "bold 32px sans-serif";
+  cizim.textAlign = "left";
+  cizim.fillText("Puan: " + puan, 20, 50);
+  cizim.font = "18px sans-serif";
+  cizim.textAlign = "right";
+  cizim.fillText("En yüksek: " + enYuksek, 420, 48);
+
+  // Izgara
+  for (let r = 0; r < BOYUT; r++) {
+    for (let k = 0; k < BOYUT; k++) {
+      const renk = izgara[r][k] === null ? BOS_KARE : izgara[r][k];
+      kareCiz(IZGARA_X + k * HUCRE, IZGARA_Y + r * HUCRE, HUCRE, renk);
+    }
+  }
+
+  // Sürüklerken yerleşeceği yeri soluk göster
+  if (tutulan !== -1) {
+    const parca = parcalar[tutulan];
+    const konum = suruklenenKonum(parca);
+    if (sigarMi(parca.sekil, konum.satir, konum.sutun)) {
+      for (const kare of parca.sekil) {
+        kareCiz(
+          IZGARA_X + (konum.sutun + kare[1]) * HUCRE,
+          IZGARA_Y + (konum.satir + kare[0]) * HUCRE,
+          HUCRE,
+          "#6e6ea0"
+        );
+      }
+    }
+  }
+
+  // Alttaki parçalar
+  for (let i = 0; i < 3; i++) {
+    const parca = parcalar[i];
+    if (parca === null || i === tutulan) continue;
+    const solX = parca.merkezX - parca.genislik * KUCUK_HUCRE / 2;
+    const solY = parca.merkezY - parca.yukseklik * KUCUK_HUCRE / 2;
+    parcaCiz(parca, solX, solY, KUCUK_HUCRE);
+  }
+
+  // Sürüklenen parça (tam boyut)
+  if (tutulan !== -1) {
+    const parca = parcalar[tutulan];
+    const konum = suruklenenKonum(parca);
+    parcaCiz(parca, konum.solX, konum.solY, HUCRE);
+  }
+
+  // Oyun bitti ekranı
+  if (bitti) {
+    cizim.fillStyle = "rgba(0, 0, 0, 0.7)";
+    cizim.fillRect(0, 0, 440, 640);
+    cizim.fillStyle = "white";
+    cizim.textAlign = "center";
+    cizim.font = "bold 56px sans-serif";
+    cizim.fillText("Oyun Bitti", 220, 260);
+    cizim.font = "32px sans-serif";
+    cizim.fillText("Puan: " + puan, 220, 320);
+    cizim.font = "24px sans-serif";
+    cizim.fillText("Tekrar oynamak için dokun", 220, 380);
+  }
+
+  requestAnimationFrame(ciz);
+}
+
+// ---------- Dokunma / fare kontrolü ----------
+// Ekrandaki konumu oyunun kendi 440x640 koordinatına çevirir
+function konumAl(olay) {
+  const kutu = tuval.getBoundingClientRect();
+  fareX = (olay.clientX - kutu.left) * (440 / kutu.width);
+  fareY = (olay.clientY - kutu.top) * (640 / kutu.height);
+}
+
+tuval.addEventListener("pointerdown", function (olay) {
+  olay.preventDefault();
+  konumAl(olay);
+
+  if (bitti) {
+    yeniden();
+    return;
+  }
+
+  // Hangi parçaya dokunuldu?
+  for (let i = 0; i < 3; i++) {
+    const parca = parcalar[i];
+    if (parca === null) continue;
+    const g = parca.genislik * KUCUK_HUCRE;
+    const y = parca.yukseklik * KUCUK_HUCRE;
+    const sol = parca.merkezX - g / 2 - 15;
+    const ust = parca.merkezY - y / 2 - 15;
+    if (fareX > sol && fareX < sol + g + 30 && fareY > ust && fareY < ust + y + 30) {
+      tutulan = i;
+      tuval.setPointerCapture(olay.pointerId);
+    }
+  }
+});
+
+tuval.addEventListener("pointermove", function (olay) {
+  olay.preventDefault();
+  konumAl(olay);
+});
+
+tuval.addEventListener("pointerup", function (olay) {
+  olay.preventDefault();
+  konumAl(olay);
+  if (tutulan === -1) return;
+
+  const parca = parcalar[tutulan];
+  const konum = suruklenenKonum(parca);
+
+  if (sigarMi(parca.sekil, konum.satir, konum.sutun)) {
+    yerlestir(parca.sekil, parca.renk, konum.satir, konum.sutun);
+    puan += parca.sekil.length;                  // her kare 1 puan
+    const silinen = doluSatirSutunSil();
+    puan += silinen * silinen * 10;              // çok silmek daha çok puan
+    parcalar[tutulan] = null;
+
+    // 3 parça da bittiyse yenilerini ver
+    if (parcalar.every(function (p) { return p === null; })) {
+      parcalar = yeniParcalar();
+    }
+
+    // En yüksek puanı güncelle
+    if (puan > enYuksek) {
+      enYuksek = puan;
+      try {
+        localStorage.setItem("blockblast_en_yuksek", String(enYuksek));
+      } catch (e) {}
+    }
+
+    if (oyunBittiMi()) bitti = true;
+  }
+
+  tutulan = -1;
+});
+
+tuval.addEventListener("pointercancel", function () {
+  tutulan = -1;
+});
+
+// ---------- Ekrana sığdır ----------
+function boyutla() {
+  const oran = Math.min(window.innerWidth / 440, window.innerHeight / 640);
+  tuval.style.width = 440 * oran + "px";
+  tuval.style.height = 640 * oran + "px";
+}
+window.addEventListener("resize", boyutla);
+boyutla();
+
+// ---------- Başlat ----------
+yeniden();
+ciz();
+</script>
+</body>
+</html>
